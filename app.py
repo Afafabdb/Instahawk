@@ -1,65 +1,112 @@
+import instaloader
 from flask import Flask, render_template, request, jsonify
-import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from instaloader import Profile, Post
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import numpy as np
+
 
 app = Flask(__name__)
+loader = instaloader.Instaloader()
+
 
 @app.route('/', methods=['GET'])
 def home():
     return render_template('home.html')
 
-@app.route('/recommendations/', methods=['GET'])
-def recommendations():
-    movie = request.args['movie']
-    df = pd.read_csv("movie_dataset.csv")
+def getSentiments(captions):
+    if len(captions) > 0 and type(captions) == list:
+        analyser = SentimentIntensityAnalyzer()
+        neutral = []
+        positive = []
+        negative = []
+        compound = []
 
-    def get_title_from_index(index):
-        return df[df.index == index]["title"].values[0]
+        for caption in captions:
+            neutral.append(analyser.polarity_scores(caption)['neu'])
+            positive.append(analyser.polarity_scores(caption)['pos'])
+            negative.append(analyser.polarity_scores(caption)['neg'])
+            compound.append(analyser.polarity_scores(caption)['compound'])
 
-    def get_index_from_title(title):
-        return df[df.title == title]["index"].values[0]
+        positive = np.array(positive)
+        negative = np.array(negative)
+        neutral = np.array(neutral)
+        compound = np.array(compound)
 
-    features = ['keywords', 'cast', 'genres', 'director']
+        return {
+            'Neutral':round(neutral.mean(),2)*100.0,
+            'Positive':round(positive.mean(),2)*100.0,
+            'Negative':round(negative.mean(), 2) * 100.0,
+            'Compound':round(compound.mean(), 2) * 100.0
+                }
+    else:
+        return '{"Negative":0.0,"Neutral":0.0,"Overall":0.0,"Positive":0.0}'
 
-    for feature in features:
-        df[feature] = df[feature].fillna('')
-
-    def combine_features(row):
-        try:
-            return row['keywords'] + " " + row['cast'] + " " + row['genres'] + " " + row['director']
-        except:
-            return ("Error")
-
-    df["combined_features"] = df.apply(combine_features, axis=1)
-
-    cv = CountVectorizer()
-    count_matrix = cv.fit_transform(df["combined_features"])
-
-    cosine_sim = cosine_similarity(count_matrix)
-    movie_user_likes = movie
-
-    movie_index = get_index_from_title(movie_user_likes)
-    similar_movies = list(enumerate(cosine_sim[movie_index]))
-
-    sorted_similar_movies = sorted(similar_movies, key=lambda x: [1], reverse=True)
-
-    recommendations_list = []
-
-    i = 0
-    for movie in sorted_similar_movies:
-        recommendations_list.append(get_title_from_index(movie[0]))
-        i = i + 1
-        if i > 10:
-            break
-
-    return jsonify(recommendations_list)
+@app.route('/checkPrivacy/', methods=['GET'])
+def checkAccountPrivacy():
+    username = request.args['username']
+    profile = Profile.from_username(loader.context, username)
+    privacy = str(profile.is_private)
+    return privacy
 
 
 
+@app.route('/basicProfile/', methods=['GET'])
+def getBasicPublicProfile():
+    username = request.args['username']
+    profile = Profile.from_username(loader.context, username)
+
+    profileInformation = []
+    profileInformation.append(profile.full_name)
+    profileInformation.append(profile.get_profile_pic_url())
 
 
+    information = {
+        "name": profile.full_name,
+        "profilePicture": profile.get_profile_pic_url(),
+        "bio": profile.biography,
+        "followers": profile.followers,
+        "following": profile.followees,
+    }
 
+    return jsonify(information)
+
+@app.route('/deepProfile/', methods=['GET'])
+def getDeepPublicProfile():
+    username = request.args['username']
+    profile = Profile.from_username(loader.context, username)
+
+    profileInformation = []
+    profileInformation.append(profile.full_name)
+    profileInformation.append(profile.get_profile_pic_url())
+
+    postsWithHashtags = 0
+    likesTotal = 0
+    videoPosts = 0
+
+    captions = []
+    for post in profile.get_posts():
+        if post.caption != None:
+            captions.append(post.caption)
+        if post.caption_hashtags != None:
+            postsWithHashtags = postsWithHashtags + 1
+        if post.likes != None:
+            likesTotal = likesTotal + post.likes
+        if post.is_video:
+            videoPosts = videoPosts + 1
+
+    information = {
+        "name": profile.full_name,
+        "profilePicture": profile.get_profile_pic_url(),
+        "bio": profile.biography,
+        "followers": profile.followers,
+        "following": profile.followees,
+        "totalProfileLikes": likesTotal,
+        "totalVideoPosts": videoPosts,
+        "postsWithHashtags": postsWithHashtags,
+        "captionSentiments": getSentiments(captions),
+    }
+
+    return jsonify(information)
 
 
 
